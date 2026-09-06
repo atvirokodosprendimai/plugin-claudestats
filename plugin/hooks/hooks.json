@@ -1,0 +1,19 @@
+{
+  "description": "Collect this session's usage when it ends, so history survives Claude Code's transcript pruning.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/collect.sh"
+            ],
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

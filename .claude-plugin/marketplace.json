@@ -1,0 +1,16 @@
+{
+  "name": "claudestats",
+  "owner": {
+    "name": "atvirokodosprendimai"
+  },
+  "description": "Token usage, cost and context-size reporting for Claude Code, from the transcripts it already writes.",
+  "plugins": [
+    {
+      "name": "claudestats",
+      "source": "./plugin",
+      "description": "Collects every billed API attempt into SQLite and exports a self-contained HTML report of tokens, cost and context size.",
+      "category": "development",
+      "tags": ["cost", "tokens", "usage", "analytics", "context"]
+    }
+  ]
+}

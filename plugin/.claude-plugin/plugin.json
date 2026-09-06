@@ -1,0 +1,17 @@
+{
+  "name": "claudestats",
+  "version": "0.1.0",
+  "description": "Collects Claude Code token usage, cost and context size from the transcripts Claude Code already writes, stores them in SQLite, and exports a self-contained HTML report.",
+  "author": {
+    "name": "atvirokodosprendimai"
+  },
+  "license": "MIT",
+  "keywords": [
+    "cost",
+    "tokens",
+    "usage",
+    "context",
+    "autocompact",
+    "analytics"
+  ]
+}

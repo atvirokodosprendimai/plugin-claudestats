@@ -46,6 +46,7 @@ func rangeFlags() []cli.Flag {
 		&cli.StringFlag{Name: "since", Usage: "only requests on or after this date (YYYY-MM-DD)"},
 		&cli.StringFlag{Name: "until", Usage: "only requests before this date (YYYY-MM-DD)"},
 		&cli.StringFlag{Name: "config-dir", Usage: "only this Claude Code config directory, matched as a substring (e.g. aks); launch flags are set per directory, so a comparison across directories compares different settings"},
+		&cli.StringSliceFlag{Name: "project", Usage: "only these project slugs, matched as substrings (repeatable). Repeat it when a directory was renamed: Claude Code derives the slug from the working directory, so a rename splits one project's history across two slugs"},
 	}
 }
 
@@ -99,12 +100,9 @@ func newApp() *cli.Command {
 				Action: runChart,
 			},
 			{
-				Name:  "verify",
-				Usage: "our priced total beside Claude Code's own, for sessions that recorded one",
-				Flags: []cli.Flag{dbFlag(), &cli.StringFlag{
-					Name:  "config-dir",
-					Usage: "only this Claude Code config directory, matched as a substring (e.g. aks)",
-				}},
+				Name:   "verify",
+				Usage:  "our priced total beside Claude Code's own, for sessions that recorded one",
+				Flags:  append([]cli.Flag{dbFlag()}, rangeFlags()...),
 				Action: runVerify,
 			},
 			{
@@ -118,21 +116,23 @@ func newApp() *cli.Command {
 
 func openDB(c *cli.Command) (*store.DB, error) { return store.Open(c.String("db")) }
 
-// parseRange turns the --since and --until flags into a half-open interval.
-func parseRange(c *cli.Command) (since, until time.Time, err error) {
+// buildFilter turns the shared narrowing flags into a store.Filter.
+func buildFilter(c *cli.Command) (store.Filter, error) {
+	var f store.Filter
+	var err error
 	if s := c.String("since"); s != "" {
-		since, err = time.Parse("2006-01-02", s)
-		if err != nil {
-			return since, until, fmt.Errorf("--since: %w", err)
+		if f.Since, err = time.Parse("2006-01-02", s); err != nil {
+			return f, fmt.Errorf("--since: %w", err)
 		}
 	}
 	if s := c.String("until"); s != "" {
-		until, err = time.Parse("2006-01-02", s)
-		if err != nil {
-			return since, until, fmt.Errorf("--until: %w", err)
+		if f.Until, err = time.Parse("2006-01-02", s); err != nil {
+			return f, fmt.Errorf("--until: %w", err)
 		}
 	}
-	return since, until, nil
+	f.ConfigDir = c.String("config-dir")
+	f.Projects = c.StringSlice("project")
+	return f, nil
 }
 
 func runCollect(ctx context.Context, c *cli.Command) error {
@@ -198,7 +198,7 @@ func runCollect(ctx context.Context, c *cli.Command) error {
 }
 
 func loadRange(ctx context.Context, c *cli.Command) (*store.DB, []store.Request, []store.Session, error) {
-	since, until, err := parseRange(c)
+	f, err := buildFilter(c)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -206,13 +206,12 @@ func loadRange(ctx context.Context, c *cli.Command) (*store.DB, []store.Request,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	dir := c.String("config-dir")
-	reqs, err := db.Requests(ctx, since, until, dir)
+	reqs, err := db.Requests(ctx, f)
 	if err != nil {
 		db.Close()
 		return nil, nil, nil, err
 	}
-	sessions, err := db.Sessions(ctx, since, until, dir)
+	sessions, err := db.Sessions(ctx, f)
 	if err != nil {
 		db.Close()
 		return nil, nil, nil, err
@@ -381,12 +380,15 @@ func runVerify(ctx context.Context, c *cli.Command) error {
 	}
 	defer db.Close()
 
-	dir := c.String("config-dir")
-	sessions, err := db.Sessions(ctx, time.Time{}, time.Time{}, dir)
+	f, err := buildFilter(c)
 	if err != nil {
 		return err
 	}
-	reqs, err := db.Requests(ctx, time.Time{}, time.Time{}, dir)
+	sessions, err := db.Sessions(ctx, f)
+	if err != nil {
+		return err
+	}
+	reqs, err := db.Requests(ctx, f)
 	if err != nil {
 		return err
 	}

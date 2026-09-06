@@ -158,25 +158,59 @@ func (d *DB) SaveSession(ctx context.Context, s Session) error {
 	return nil
 }
 
-// Requests returns stored attempts within an optional date range, oldest
-// first. A zero time means unbounded on that side.
+// Filter narrows a query. A zero value returns everything.
 //
-// configDir narrows the result to one Claude Code configuration directory,
-// matched as a substring so "aks" selects ~/.sandboxes/aks. This filter is not
-// a convenience: launch flags such as --autocompact are set per config
-// directory, so a comparison that mixes directories is comparing sessions that
-// were never under the same settings.
-func (d *DB) Requests(ctx context.Context, since, until time.Time, configDir string) ([]Request, error) {
-	q := d.gorm.WithContext(ctx).Order("ts")
-	if !since.IsZero() {
-		q = q.Where("ts >= ?", since)
+// It is a struct rather than a parameter list because the two query methods
+// take exactly the same narrowing, and every filter added as a positional
+// argument has so far meant editing both signatures and all four call sites.
+type Filter struct {
+	// Since and Until bound the range, half-open. A zero time is unbounded.
+	Since, Until time.Time
+
+	// ConfigDir narrows to one Claude Code configuration directory, matched
+	// as a substring so "aks" selects ~/.sandboxes/aks. This is not a
+	// convenience: launch flags such as --autocompact are set per config
+	// directory, so a comparison that mixes directories is comparing sessions
+	// that were never under the same settings.
+	ConfigDir string
+
+	// Projects narrows to project slugs, matched as substrings and combined
+	// with OR. It takes a LIST rather than one value for a specific reason:
+	// Claude Code derives the slug from the working directory, so RENAMING A
+	// DIRECTORY GIVES THE SAME PROJECT A NEW SLUG AND SPLITS ITS HISTORY IN
+	// TWO. Measured 2026-09-06: agentmemories (141 sessions to 2026-09-01)
+	// and agentsmemory (8 sessions after it) are one project whose directory
+	// was renamed, and filtering on either slug alone hides most of its cost.
+	Projects []string
+}
+
+func (f Filter) apply(q *gorm.DB, timeColumn string) *gorm.DB {
+	if !f.Since.IsZero() {
+		q = q.Where(timeColumn+" >= ?", f.Since)
 	}
-	if !until.IsZero() {
-		q = q.Where("ts < ?", until)
+	if !f.Until.IsZero() {
+		q = q.Where(timeColumn+" < ?", f.Until)
 	}
-	if configDir != "" {
-		q = q.Where("config_dir LIKE ?", "%"+configDir+"%")
+	if f.ConfigDir != "" {
+		q = q.Where("config_dir LIKE ?", "%"+f.ConfigDir+"%")
 	}
+	if len(f.Projects) > 0 {
+		// OR across the slugs, AND-ed with everything else. The group is built
+		// on a fresh session so gorm BRACKETS it rather than flattening the Or
+		// into the surrounding AND, which would silently widen the query to
+		// every project once any other narrowing was present.
+		or := q.Session(&gorm.Session{NewDB: true}).Where("project LIKE ?", "%"+f.Projects[0]+"%")
+		for _, p := range f.Projects[1:] {
+			or = or.Or("project LIKE ?", "%"+p+"%")
+		}
+		q = q.Where(or)
+	}
+	return q
+}
+
+// Requests returns stored attempts matching the filter, oldest first.
+func (d *DB) Requests(ctx context.Context, f Filter) ([]Request, error) {
+	q := f.apply(d.gorm.WithContext(ctx).Order("ts"), "ts")
 	var rows []Request
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("store: reading requests: %w", err)
@@ -184,20 +218,9 @@ func (d *DB) Requests(ctx context.Context, since, until time.Time, configDir str
 	return rows, nil
 }
 
-// Sessions returns stored sessions within an optional date range, oldest
-// first, optionally narrowed to one configuration directory. See Requests for
-// why that narrowing matters.
-func (d *DB) Sessions(ctx context.Context, since, until time.Time, configDir string) ([]Session, error) {
-	q := d.gorm.WithContext(ctx).Order("started_at")
-	if !since.IsZero() {
-		q = q.Where("started_at >= ?", since)
-	}
-	if !until.IsZero() {
-		q = q.Where("started_at < ?", until)
-	}
-	if configDir != "" {
-		q = q.Where("config_dir LIKE ?", "%"+configDir+"%")
-	}
+// Sessions returns stored sessions matching the filter, oldest first.
+func (d *DB) Sessions(ctx context.Context, f Filter) ([]Session, error) {
+	q := f.apply(d.gorm.WithContext(ctx).Order("started_at"), "started_at")
 	var rows []Session
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("store: reading sessions: %w", err)
